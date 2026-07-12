@@ -4,7 +4,7 @@
 //! 1. models.rs の `Broker` にバリアントを追加
 //! 2. ここに `BrokerProfile` を1つ追加
 //! 3. csv_import.rs に列マッピング(パース関数)を追加
-//! の3ステップで対応する。
+//!    の3ステップで対応する。
 
 use crate::models::Broker;
 

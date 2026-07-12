@@ -8,7 +8,7 @@
 //!   構成比(セクター別)画面のセクター情報源になる。手動編集も想定。
 
 use chrono::NaiveDate;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection};
 
 use std::collections::HashMap;
 
@@ -512,8 +512,7 @@ pub fn insert_trades(
 
             if inserted_row_count > 0 {
                 new_trade_count += 1;
-                upsert_stock_name_statement
-                    .execute(params![trade.stock_code, trade.stock_name])?;
+                upsert_stock_name_statement.execute(params![trade.stock_code, trade.stock_name])?;
             } else {
                 duplicate_trade_count += 1;
             }
@@ -631,8 +630,11 @@ pub fn insert_realized_pnl(
 
     transaction.commit()?;
 
-    let mut trade_dates: Vec<chrono::NaiveDate> =
-        pnl_file.records.iter().map(|record| record.trade_date).collect();
+    let mut trade_dates: Vec<chrono::NaiveDate> = pnl_file
+        .records
+        .iter()
+        .map(|record| record.trade_date)
+        .collect();
     trade_dates.sort();
 
     Ok(RealizedPnlImportSummary {
@@ -654,9 +656,9 @@ pub fn insert_realized_pnl(
 /// 実現損益は「確定値」を正とする:
 /// - e-smart: trade_records の売買損益列(realized_profit_loss)
 /// - SBI: realized_pnl_records(譲渡益税明細CSV由来)
-/// これらを (broker, trade_date, stock_code) 粒度で突き合わせ、確定損益を集計する。
-/// 譲渡益税明細が未取り込みのSBI売りは「実現損益不明」として集計から除外する
-/// (概算はしない。正確性を優先する方針)。
+///   これらを (broker, trade_date, stock_code) 粒度で突き合わせ、確定損益を集計する。
+///   譲渡益税明細が未取り込みのSBI売りは「実現損益不明」として集計から除外する
+///   (概算はしない。正確性を優先する方針)。
 ///
 /// 売買回数・手数料は従来どおり trade_records から数える。
 /// `broker_filter`: 'sbi' 等。None=全社。
@@ -689,12 +691,19 @@ pub fn fetch_trade_analysis(
          WHERE (?1 IS NULL OR broker = ?1)
            AND (?2 IS NULL OR trade_date >= ?2)",
         params![broker_filter, start_date],
-        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, f64>(2)?)),
+        |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, f64>(2)?,
+            ))
+        },
     )?;
 
     // ---- 確定実現損益を1つのリストに統合 ----
     // (broker, trade_date, stock_code, stock_name, realized_pnl)
     struct ConfirmedPnl {
+        #[allow(dead_code)]
         broker: String,
         trade_date: String,
         stock_code: String,
@@ -804,12 +813,14 @@ pub fn fetch_trade_analysis(
 
     let mut stock_items: Vec<StockRealizedPnlItem> = stock_totals
         .into_iter()
-        .map(|(stock_code, (realized, sell_count, fallback_name))| StockRealizedPnlItem {
-            stock_name: resolve_stock_name(&stock_code, &fallback_name),
-            stock_code,
-            realized_profit_loss: realized,
-            sell_trade_count: sell_count,
-        })
+        .map(
+            |(stock_code, (realized, sell_count, fallback_name))| StockRealizedPnlItem {
+                stock_name: resolve_stock_name(&stock_code, &fallback_name),
+                stock_code,
+                realized_profit_loss: realized,
+                sell_trade_count: sell_count,
+            },
+        )
         .collect();
     stock_items.sort_by(|left, right| {
         right
@@ -840,7 +851,10 @@ pub fn fetch_trade_analysis(
              GROUP BY trade_date, stock_code",
         )?;
         let lookup_rows = lookup_statement.query_map([], |row| {
-            Ok(((row.get::<_, String>(0)?, row.get::<_, String>(1)?), row.get::<_, f64>(2)?))
+            Ok((
+                (row.get::<_, String>(0)?, row.get::<_, String>(1)?),
+                row.get::<_, f64>(2)?,
+            ))
         })?;
         for row in lookup_rows {
             let (key, value) = row?;
