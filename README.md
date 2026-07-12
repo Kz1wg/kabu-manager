@@ -79,8 +79,8 @@ src/
 
 DBファイルの場所(画面フッターにも表示):
 
-- macOS: `~/Library/Application Support/com.kazu.kabu-manager/kabu_manager.db`
-- Windows: `%APPDATA%\com.kazu.kabu-manager\kabu_manager.db`
+- macOS: `~/Library/Application Support/com.kz1wg.kabu-manager/kabu_manager.db`
+- Windows: `%APPDATA%\com.kz1wg.kabu-manager\kabu_manager.db`
 
 ### CSVフォーマットの観察結果(実サンプル準拠)
 
