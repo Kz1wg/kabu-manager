@@ -27,16 +27,7 @@ SQL側(`WHERE broker = ?`)でフィルタしている。
 - Node.js 20以上
 - macOS: Xcode Command Line Tools / Windows: WebView2(通常プリインストール) と VS Build Tools
 
-### 手順
 
-```bash
-cd kabu-manager
-yarn
-yarn tauri dev     # 開発起動
-yarn tauri build   # 配布用ビルド
-```
-
-初回の `tauri dev` はRust依存のコンパイルで数分かかる。
 
 ### 動作確認
 
