@@ -210,16 +210,26 @@ pub fn import_csv_auto(
 
 /// 取引分析(実現損益サマリー・月別推移・銘柄別・直近取引)を取得する。
 /// `broker_filter`: 'sbi' 等の識別子。省略/nullなら全社。
+/// 取引分析(実現損益サマリー・期間別推移・銘柄別・直近取引)を取得する。
+/// `broker_filter`: 'sbi' 等の識別子。省略/nullなら全社。
+/// `start_date`: 'YYYY-MM-DD'。省略/nullなら全期間。
+/// `granularity`: 'day' | 'week' | 'month'。グラフの集計粒度。
 #[tauri::command]
 pub fn fetch_trade_analysis(
     state: State<AppState>,
     broker_filter: Option<String>,
     start_date: Option<String>,
+    granularity: String,
 ) -> Result<TradeAnalysis, String> {
     let connection = state
         .database_connection
         .lock()
         .map_err(|_| "データベース接続のロックに失敗しました".to_owned())?;
-    database::fetch_trade_analysis(&connection, broker_filter.as_deref(), start_date.as_deref())
-        .map_err(|error| error.to_string())
+    database::fetch_trade_analysis(
+        &connection,
+        broker_filter.as_deref(),
+        start_date.as_deref(),
+        database::TradeAnalysisGranularity::from_key(&granularity),
+    )
+    .map_err(|error| error.to_string())
 }

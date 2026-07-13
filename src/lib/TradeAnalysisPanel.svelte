@@ -12,13 +12,21 @@
   let { brokerFilter = "all" } = $props();
 
   const periodDefinitions = [
-    { key: "all", label: "全期間", months: null },
-    { key: "1m", label: "1ヶ月", months: 1 },
-    { key: "3m", label: "3ヶ月", months: 3 },
-    { key: "6m", label: "半年", months: 6 },
-    { key: "1y", label: "1年", months: 12 },
+    { key: "all", label: "全期間", months: null, granularity: "month" },
+    { key: "1m", label: "1ヶ月", months: 1, granularity: "day" },
+    { key: "3m", label: "3ヶ月", months: 3, granularity: "week" },
+    { key: "6m", label: "半年", months: 6, granularity: "month" },
+    { key: "1y", label: "1年", months: 12, granularity: "month" },
   ];
   let selectedPeriod = $state("all");
+
+  const currentGranularity = $derived(
+    periodDefinitions.find((period) => period.key === selectedPeriod)?.granularity ??
+      "month"
+  );
+  const granularityLabel = $derived(
+    { day: "日別", week: "週別", month: "月別" }[currentGranularity]
+  );
 
   let chartContainer = $state(undefined); // bind:this
   let chartInstance = $state(null);
@@ -42,11 +50,13 @@
   $effect(() => {
     const currentFilter = brokerFilter;
     const currentPeriod = selectedPeriod;
+    const currentGranularityValue = currentGranularity;
     (async () => {
       try {
         analysis = await invoke("fetch_trade_analysis", {
           brokerFilter: currentFilter === "all" ? null : currentFilter,
           startDate: computeStartDate(currentPeriod),
+          granularity: currentGranularityValue,
         });
         loadErrorMessage = "";
       } catch (errorMessage) {
@@ -94,21 +104,27 @@
     return `${rate.toFixed(1)}% (${analysis.winning_sell_count}勝/${analysis.sell_count_with_known_pnl}回)`;
   });
 
-  // 月別実現損益(棒) + 累計(折れ線)
+  // 期間別実現損益(棒) + 累計(折れ線)。粒度(日/週/月)に応じて表示を調整する
   $effect(() => {
     if (!chartInstance || !analysis) return;
-    const monthlyPoints = analysis.monthly_points;
+    const periodPoints = analysis.period_points;
+    // 日次はバケット数が多くなりがちなので、ラベル回転とdataZoomで見やすくする
+    const isDense = currentGranularity === "day" && periodPoints.length > 15;
 
     chartInstance.setOption(
       {
         tooltip: { trigger: "axis", valueFormatter: (value) => formatSignedYen(value) },
-        legend: { data: ["月別実現損益", "累計"] },
-        grid: { left: 80, right: 80, top: 40, bottom: 40 },
-        xAxis: { type: "category", data: monthlyPoints.map((point) => point.month) },
+        legend: { data: [`実現損益(${granularityLabel})`, "累計"] },
+        grid: { left: 80, right: 80, top: 40, bottom: isDense ? 70 : 40 },
+        xAxis: {
+          type: "category",
+          data: periodPoints.map((point) => point.period_label),
+          axisLabel: isDense ? { rotate: 45 } : {},
+        },
         yAxis: [
           {
             type: "value",
-            name: "月別",
+            name: granularityLabel,
             axisLabel: { formatter: (value) => value.toLocaleString("ja-JP") },
           },
           {
@@ -118,12 +134,13 @@
             splitLine: { show: false },
           },
         ],
+        dataZoom: isDense ? [{ type: "inside" }, { type: "slider", height: 16, bottom: 30 }] : [],
         series: [
           {
-            name: "月別実現損益",
+            name: `実現損益(${granularityLabel})`,
             type: "bar",
             yAxisIndex: 0,
-            data: monthlyPoints.map((point) => ({
+            data: periodPoints.map((point) => ({
               value: point.realized_profit_loss,
               itemStyle: { color: point.realized_profit_loss >= 0 ? "#0a7a3d" : "#c0392b" },
             })),
@@ -133,7 +150,7 @@
             name: "累計",
             type: "line",
             yAxisIndex: 1,
-            data: monthlyPoints.map((point) => point.cumulative_total_profit_loss),
+            data: periodPoints.map((point) => point.cumulative_total_profit_loss),
             symbolSize: 6,
             color: "#2455b8",
           },
@@ -200,6 +217,9 @@
     </div>
   </div>
 
+  <div class="chart-caption">
+    グラフの集計単位: {granularityLabel}(表示期間に応じて自動調整されます)
+  </div>
   <div class="chart-container" bind:this={chartContainer}></div>
 
   <div class="detail-columns">
@@ -344,9 +364,14 @@
     font-weight: 400;
     color: #778;
   }
+  .chart-caption {
+    font-size: 0.76rem;
+    color: #889;
+    margin: 0.1rem 0 0.2rem;
+  }
   .chart-container {
     width: 100%;
-    height: 300px;
+    height: 320px;
   }
   .detail-columns {
     display: grid;

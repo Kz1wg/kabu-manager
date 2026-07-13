@@ -27,7 +27,16 @@ SQL側(`WHERE broker = ?`)でフィルタしている。
 - Node.js 20以上
 - macOS: Xcode Command Line Tools / Windows: WebView2(通常プリインストール) と VS Build Tools
 
+### 手順
 
+```bash
+cd kabu-manager
+yarn
+yarn tauri dev     # 開発起動
+yarn tauri build   # 配布用ビルド
+```
+
+初回の `tauri dev` はRust依存のコンパイルで数分かかる。
 
 ### 動作確認
 
@@ -73,6 +82,11 @@ DBファイルの場所(画面フッターにも表示):
 - macOS: `~/Library/Application Support/com.kz1wg.kabu-manager/kabu_manager.db`
 - Windows: `%APPDATA%\com.kz1wg.kabu-manager\kabu_manager.db`
 
+※ `identifier`(`src-tauri/tauri.conf.json`)を変更すると、この保存先パスも
+変わる。既存のDBを引き継ぐ場合は、旧パスの`kabu_manager.db`を新パスに
+手動でコピーする(旧パス自体は自動削除されないので、コピー後に手動で
+削除してよい)。
+
 ### CSVフォーマットの観察結果(実サンプル準拠)
 
 | | SBI証券(ポートフォリオ画面) | e-smart証券(残高照会) |
@@ -93,6 +107,15 @@ DBファイルの場所(画面フッターにも表示):
 2. `broker_profile.rs` の `BROKER_PROFILES` に判定キーワードとヘッダー必須列を追加
 3. `csv_import.rs` に列マッピング(パース関数)を追加
 
+## 今後の候補
+
+- EChartsのバンドルサイズ削減: `echarts/core` からの部分import に切り替え
+- `stock_master` のセクター手動編集UI(現状はSBIのCSV取り込みで自動更新、
+  またはDBを直接UPDATE)
+- 実現損益(推定): 総平均法の性質を使い、スナップショット間の保有株数減少から
+  実現損益を推定する機能。設計検討・型定義(`realized_pnl.rs`)まで着手済みだが
+  未接続(lib.rsに未登録)。証券会社の取引履歴CSVが手に入れば、推定ではなく
+  正確な実現損益を取り込む形に置き換えられる
 
 ## 実装済みタブ
 
@@ -106,9 +129,12 @@ DBファイルの場所(画面フッターにも表示):
   クリックでズームイン)と円グラフ(セクター別/銘柄別)を切り替え可能。
   セクターは `stock_master.sector_33` 由来で、未登録銘柄は「未分類」に集約
 - **取引分析**: 取引履歴CSVと譲渡益税明細CSVから実現損益を可視化。
-  KPI(実現損益・勝率・売買回数・手数料)、月別実現損益(棒)+累計(折れ線)、
+  KPI(実現損益・勝率・売買回数・手数料)、実現損益推移(棒)+累計(折れ線)、
   銘柄別実現損益ランキング、直近取引一覧。表示期間を選択可能
   (全期間 / 1ヶ月 / 3ヶ月 / 半年 / 1年。開始日はフロントで暦計算しRustに渡す)。
+  グラフの集計粒度は選択期間に応じて自動調整される
+  (1ヶ月→日別 / 3ヶ月→週別(月曜始まり) / 半年・1年・全期間→月別)。
+  日別表示でバケット数が多い場合はラベル回転+dataZoomスライダーで見やすくする。
   取り込みは保有株CSVと同じドロップ/選択で、種類は内容から自動判別。
   実現損益は**確定値のみ**を扱う(概算はしない):
   - e-smart: 取引履歴CSV(TradeKabu)の売買損益列

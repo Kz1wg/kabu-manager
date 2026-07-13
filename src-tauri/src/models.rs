@@ -207,12 +207,11 @@ pub enum CsvImportOutcome {
     RealizedPnl(RealizedPnlImportSummary),
 }
 
-/// 月別実現損益(グラフ用)
+/// 実現損益の期間別集計(グラフ用)。粒度(日/週/月)は呼び出し側で選べる。
 #[derive(Debug, Serialize)]
-pub struct MonthlyRealizedPnlPoint {
-    /// 'YYYY-MM'
-    pub month: String,
-    /// 確定実現損益(e-smart=売買損益列 / SBI=譲渡益税明細)
+pub struct PeriodRealizedPnlPoint {
+    /// 粒度により 'YYYY-MM-DD'(日/週の開始日=月曜) または 'YYYY-MM'(月)
+    pub period_label: String,
     pub realized_profit_loss: f64,
     pub cumulative_total_profit_loss: f64,
 }
@@ -257,7 +256,7 @@ pub struct TradeAnalysis {
     pub sell_count_with_known_pnl: i64,
     /// SBIの売りで譲渡益税明細が未取り込みのため損益不明の件数
     pub unknown_pnl_sell_count: i64,
-    pub monthly_points: Vec<MonthlyRealizedPnlPoint>,
+    pub period_points: Vec<PeriodRealizedPnlPoint>,
     pub stock_items: Vec<StockRealizedPnlItem>,
     pub recent_trades: Vec<TradeListItem>,
 }

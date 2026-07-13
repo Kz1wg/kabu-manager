@@ -7,14 +7,14 @@
 //! - `stock_master`: 銘柄マスタ。SBIのCSVに含まれる33業種で自動更新され、
 //!   構成比(セクター別)画面のセクター情報源になる。手動編集も想定。
 
-use chrono::NaiveDate;
-use rusqlite::{params, Connection};
+use chrono::{Datelike, NaiveDate};
+use rusqlite::{params, Connection, OptionalExtension};
 
 use std::collections::HashMap;
 
 use crate::models::{
     AssetHistoryPoint, Broker, CompositionItem, HoldingRecord, ImportBatchSummary, ImportSummary,
-    MonthlyRealizedPnlPoint, ParsedRealizedPnlFile, ParsedSnapshot, ParsedTradeFile,
+    ParsedRealizedPnlFile, ParsedSnapshot, ParsedTradeFile, PeriodRealizedPnlPoint,
     RealizedPnlImportSummary, StockHistoryPoint, StockListItem, StockRealizedPnlItem,
     TradeAnalysis, TradeImportSummary, TradeListItem,
 };
@@ -512,7 +512,8 @@ pub fn insert_trades(
 
             if inserted_row_count > 0 {
                 new_trade_count += 1;
-                upsert_stock_name_statement.execute(params![trade.stock_code, trade.stock_name])?;
+                upsert_stock_name_statement
+                    .execute(params![trade.stock_code, trade.stock_name])?;
             } else {
                 duplicate_trade_count += 1;
             }
@@ -630,11 +631,8 @@ pub fn insert_realized_pnl(
 
     transaction.commit()?;
 
-    let mut trade_dates: Vec<chrono::NaiveDate> = pnl_file
-        .records
-        .iter()
-        .map(|record| record.trade_date)
-        .collect();
+    let mut trade_dates: Vec<chrono::NaiveDate> =
+        pnl_file.records.iter().map(|record| record.trade_date).collect();
     trade_dates.sort();
 
     Ok(RealizedPnlImportSummary {
@@ -651,22 +649,59 @@ pub fn insert_realized_pnl(
     })
 }
 
+/// グラフの集計粒度。表示期間が短いほど細かくして情報量を保つ。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TradeAnalysisGranularity {
+    Day,
+    Week,
+    Month,
+}
+
+impl TradeAnalysisGranularity {
+    pub fn from_key(key: &str) -> Self {
+        match key {
+            "day" => Self::Day,
+            "week" => Self::Week,
+            _ => Self::Month,
+        }
+    }
+
+    /// 約定日('YYYY-MM-DD')から集計キーを作る。
+    /// 週は月曜始まりの週の開始日、月は 'YYYY-MM'。
+    /// いずれもISO形式の文字列なので辞書順ソート=時系列順になる。
+    fn bucket_key(&self, trade_date_text: &str) -> String {
+        match self {
+            Self::Day => trade_date_text.to_owned(),
+            Self::Week => {
+                let date = NaiveDate::parse_from_str(trade_date_text, "%Y-%m-%d")
+                    .expect("trade_dateはYYYY-MM-DD形式のはず");
+                let days_since_monday = date.weekday().num_days_from_monday() as i64;
+                let monday_of_week = date - chrono::Duration::days(days_since_monday);
+                monday_of_week.format("%Y-%m-%d").to_string()
+            }
+            Self::Month => trade_date_text.chars().take(7).collect(),
+        }
+    }
+}
+
 /// 取引分析画面用の集計一式を返す。
 ///
 /// 実現損益は「確定値」を正とする:
 /// - e-smart: trade_records の売買損益列(realized_profit_loss)
 /// - SBI: realized_pnl_records(譲渡益税明細CSV由来)
-///   これらを (broker, trade_date, stock_code) 粒度で突き合わせ、確定損益を集計する。
-///   譲渡益税明細が未取り込みのSBI売りは「実現損益不明」として集計から除外する
-///   (概算はしない。正確性を優先する方針)。
+/// これらを (broker, trade_date, stock_code) 粒度で突き合わせ、確定損益を集計する。
+/// 譲渡益税明細が未取り込みのSBI売りは「実現損益不明」として集計から除外する
+/// (概算はしない。正確性を優先する方針)。
 ///
 /// 売買回数・手数料は従来どおり trade_records から数える。
 /// `broker_filter`: 'sbi' 等。None=全社。
 /// `start_date`('YYYY-MM-DD'): この日以降の約定のみ。None=全期間。
+/// `granularity`: グラフの集計粒度(表示期間に応じて呼び出し側が選ぶ)。
 pub fn fetch_trade_analysis(
     connection: &Connection,
     broker_filter: Option<&str>,
     start_date: Option<&str>,
+    granularity: TradeAnalysisGranularity,
 ) -> rusqlite::Result<TradeAnalysis> {
     // 銘柄名はマスタの正式名を優先
     let mut master_name_statement =
@@ -691,19 +726,12 @@ pub fn fetch_trade_analysis(
          WHERE (?1 IS NULL OR broker = ?1)
            AND (?2 IS NULL OR trade_date >= ?2)",
         params![broker_filter, start_date],
-        |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, i64>(1)?,
-                row.get::<_, f64>(2)?,
-            ))
-        },
+        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, f64>(2)?)),
     )?;
 
     // ---- 確定実現損益を1つのリストに統合 ----
     // (broker, trade_date, stock_code, stock_name, realized_pnl)
     struct ConfirmedPnl {
-        #[allow(dead_code)]
         broker: String,
         trade_date: String,
         stock_code: String,
@@ -776,7 +804,7 @@ pub fn fetch_trade_analysis(
     let mut total_realized_profit_loss = 0.0;
     let mut winning_sell_count = 0i64;
     let mut sell_count_with_known_pnl = 0i64;
-    let mut monthly_totals: std::collections::BTreeMap<String, f64> =
+    let mut period_totals: std::collections::BTreeMap<String, f64> =
         std::collections::BTreeMap::new();
     let mut stock_totals: HashMap<String, (f64, i64, String)> = HashMap::new();
 
@@ -786,8 +814,8 @@ pub fn fetch_trade_analysis(
         if confirmed.realized_profit_loss > 0.0 {
             winning_sell_count += 1;
         }
-        let month_key = confirmed.trade_date.chars().take(7).collect::<String>();
-        *monthly_totals.entry(month_key).or_insert(0.0) += confirmed.realized_profit_loss;
+        let period_key = granularity.bucket_key(&confirmed.trade_date);
+        *period_totals.entry(period_key).or_insert(0.0) += confirmed.realized_profit_loss;
 
         let stock_entry = stock_totals.entry(confirmed.stock_code.clone()).or_insert((
             0.0,
@@ -799,12 +827,12 @@ pub fn fetch_trade_analysis(
     }
 
     let mut cumulative_total_profit_loss = 0.0;
-    let monthly_points: Vec<MonthlyRealizedPnlPoint> = monthly_totals
+    let period_points: Vec<PeriodRealizedPnlPoint> = period_totals
         .into_iter()
-        .map(|(month, confirmed)| {
+        .map(|(period_label, confirmed)| {
             cumulative_total_profit_loss += confirmed;
-            MonthlyRealizedPnlPoint {
-                month,
+            PeriodRealizedPnlPoint {
+                period_label,
                 realized_profit_loss: confirmed,
                 cumulative_total_profit_loss,
             }
@@ -813,14 +841,12 @@ pub fn fetch_trade_analysis(
 
     let mut stock_items: Vec<StockRealizedPnlItem> = stock_totals
         .into_iter()
-        .map(
-            |(stock_code, (realized, sell_count, fallback_name))| StockRealizedPnlItem {
-                stock_name: resolve_stock_name(&stock_code, &fallback_name),
-                stock_code,
-                realized_profit_loss: realized,
-                sell_trade_count: sell_count,
-            },
-        )
+        .map(|(stock_code, (realized, sell_count, fallback_name))| StockRealizedPnlItem {
+            stock_name: resolve_stock_name(&stock_code, &fallback_name),
+            stock_code,
+            realized_profit_loss: realized,
+            sell_trade_count: sell_count,
+        })
         .collect();
     stock_items.sort_by(|left, right| {
         right
@@ -851,10 +877,7 @@ pub fn fetch_trade_analysis(
              GROUP BY trade_date, stock_code",
         )?;
         let lookup_rows = lookup_statement.query_map([], |row| {
-            Ok((
-                (row.get::<_, String>(0)?, row.get::<_, String>(1)?),
-                row.get::<_, f64>(2)?,
-            ))
+            Ok(((row.get::<_, String>(0)?, row.get::<_, String>(1)?), row.get::<_, f64>(2)?))
         })?;
         for row in lookup_rows {
             let (key, value) = row?;
@@ -909,7 +932,7 @@ pub fn fetch_trade_analysis(
         winning_sell_count,
         sell_count_with_known_pnl,
         unknown_pnl_sell_count,
-        monthly_points,
+        period_points,
         stock_items,
         recent_trades,
     })

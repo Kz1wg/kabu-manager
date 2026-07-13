@@ -13,7 +13,9 @@
 
 use chrono::NaiveDate;
 
-use crate::csv_import::{build_header_index_map, field_text, record_has_columns, CsvImportError};
+use crate::csv_import::{
+    build_header_index_map, field_text, record_has_columns, CsvImportError,
+};
 use crate::models::{Broker, ParsedRealizedPnl, ParsedRealizedPnlFile};
 
 /// CSV本文が譲渡益税明細CSVかどうか(他CSVとの振り分けに使う)
@@ -27,10 +29,14 @@ pub fn looks_like_realized_pnl_csv(csv_text: &str) -> bool {
 /// (decode_csv_bytesはBOM/UTF-8/CP932は処理するが改行コードは触らないため)
 fn decode_and_normalize_newlines(raw_bytes: &[u8]) -> String {
     let decoded = crate::csv_import::decode_csv_bytes(raw_bytes);
-    decoded.replace(['\u{0085}', '\u{2028}', '\u{2029}'], "\n")
+    decoded
+        .replace('\u{0085}', "\n")
+        .replace('\u{2028}', "\n")
+        .replace('\u{2029}', "\n")
 }
 
-const REALIZED_PNL_HEADER_COLUMNS: &[&str] = &["銘柄コード", "約定日", "取引", "損益金額/徴収額"];
+const REALIZED_PNL_HEADER_COLUMNS: &[&str] =
+    &["銘柄コード", "約定日", "取引", "損益金額/徴収額"];
 
 /// `12株` / `1,234` / `+60` / `-308` / `--` を数値化する
 fn parse_realized_number(raw_text: &str) -> Option<f64> {
@@ -54,7 +60,9 @@ fn parse_flexible_date(raw_text: &str) -> Option<NaiveDate> {
 }
 
 /// 譲渡益税明細CSVのバイト列をパースするエントリポイント
-pub fn parse_realized_pnl_csv(raw_bytes: &[u8]) -> Result<ParsedRealizedPnlFile, CsvImportError> {
+pub fn parse_realized_pnl_csv(
+    raw_bytes: &[u8],
+) -> Result<ParsedRealizedPnlFile, CsvImportError> {
     let csv_text = decode_and_normalize_newlines(raw_bytes);
     if !looks_like_realized_pnl_csv(&csv_text) {
         return Err(CsvImportError::UnknownBroker);
@@ -101,21 +109,22 @@ pub fn parse_realized_pnl_csv(raw_bytes: &[u8]) -> Result<ParsedRealizedPnlFile,
         else {
             continue;
         };
-        let Some(quantity) =
-            field_text(record, current_header_map, "数量").and_then(parse_realized_number)
+        let Some(quantity) = field_text(record, current_header_map, "数量")
+            .and_then(parse_realized_number)
         else {
             continue;
         };
         // 損益金額/徴収額列。符号付き。ここが取れない行はスキップ
-        let Some(realized_profit_loss) = field_text(record, current_header_map, "損益金額/徴収額")
-            .and_then(|text| {
-                let trimmed = text.trim();
-                if trimmed == "--" || trimmed.is_empty() {
-                    Some(0.0)
-                } else {
-                    parse_signed_number(trimmed)
-                }
-            })
+        let Some(realized_profit_loss) =
+            field_text(record, current_header_map, "損益金額/徴収額")
+                .and_then(|text| {
+                    let trimmed = text.trim();
+                    if trimmed == "--" || trimmed.is_empty() {
+                        Some(0.0)
+                    } else {
+                        parse_signed_number(trimmed)
+                    }
+                })
         else {
             continue;
         };

@@ -20,8 +20,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             // DBファイルは OS 標準のアプリデータディレクトリに置く。
-            //   macOS:   ~/Library/Application Support/com.kazu.kabu-manager/kabu_manager.db
-            //   Windows: %APPDATA%\com.kazu.kabu-manager\kabu_manager.db
+            //   macOS:   ~/Library/Application Support/com.kz1wg.kabu-manager/kabu_manager.db
+            //   Windows: %APPDATA%\com.kz1wg.kabu-manager\kabu_manager.db
             // 場所は画面フッターにも表示する(fetch_database_path)。
             let app_data_directory = app.path().app_data_dir()?;
             std::fs::create_dir_all(&app_data_directory)?;
