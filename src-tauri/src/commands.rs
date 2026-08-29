@@ -6,7 +6,7 @@
 use std::path::Path;
 use std::sync::Mutex;
 
-use chrono::NaiveDate;
+use chrono::{Duration, Local, NaiveDate, Timelike};
 use tauri::State;
 
 use crate::csv_import;
@@ -15,6 +15,7 @@ use crate::models::{
     AssetHistoryPoint, CompositionItem, CsvImportOutcome, HoldingRecord, ImportBatchSummary,
     ImportSummary, StockHistoryPoint, StockListItem, TradeAnalysis,
 };
+use crate::models::Broker;
 use crate::realized_pnl_import;
 use crate::trade_import;
 
@@ -46,9 +47,14 @@ pub fn import_holdings_csv(
         ),
         _ => None,
     };
-    let snapshot_date = override_date
-        .or(snapshot.snapshot_date)
-        .unwrap_or_else(|| chrono::Local::now().date_naive());
+    let now = Local::now();
+    let snapshot_date = resolve_snapshot_date(
+        snapshot.broker,
+        override_date,
+        snapshot.snapshot_date,
+        now.date_naive(),
+        now.hour(),
+    );
 
     let source_file_name = Path::new(&file_path)
         .file_name()
@@ -62,6 +68,24 @@ pub fn import_holdings_csv(
 
     database::replace_snapshot(&mut connection, &snapshot, snapshot_date, &source_file_name)
         .map_err(|error| format!("データベース登録に失敗しました: {error}"))
+}
+
+fn resolve_snapshot_date(
+    broker: Broker,
+    override_date: Option<NaiveDate>,
+    csv_date: Option<NaiveDate>,
+    current_date: NaiveDate,
+    current_hour: u32,
+) -> NaiveDate {
+    if let Some(date) = override_date.or(csv_date) {
+        return date;
+    }
+
+    if broker == Broker::Sbi && current_hour < 12 {
+        return current_date - Duration::days(1);
+    }
+
+    current_date
 }
 
 /// 保有一覧(証券会社ごとの最新スナップショット)を取得する
@@ -232,4 +256,47 @@ pub fn fetch_trade_analysis(
         database::TradeAnalysisGranularity::from_key(&granularity),
     )
     .map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_snapshot_date;
+    use crate::models::Broker;
+    use chrono::NaiveDate;
+
+    const CURRENT_DATE: NaiveDate = NaiveDate::from_ymd_opt(2026, 8, 27).unwrap();
+
+    #[test]
+    fn shifts_sbi_auto_date_to_previous_day_before_noon() {
+        assert_eq!(
+            resolve_snapshot_date(Broker::Sbi, None, None, CURRENT_DATE, 11),
+            NaiveDate::from_ymd_opt(2026, 8, 26).unwrap()
+        );
+    }
+
+    #[test]
+    fn keeps_sbi_auto_date_on_or_after_noon() {
+        assert_eq!(
+            resolve_snapshot_date(Broker::Sbi, None, None, CURRENT_DATE, 12),
+            CURRENT_DATE
+        );
+    }
+
+    #[test]
+    fn does_not_shift_other_brokers_or_explicit_dates() {
+        let explicit_date = NaiveDate::from_ymd_opt(2026, 8, 20).unwrap();
+
+        assert_eq!(
+            resolve_snapshot_date(Broker::Esmart, None, None, CURRENT_DATE, 9),
+            CURRENT_DATE
+        );
+        assert_eq!(
+            resolve_snapshot_date(Broker::Sbi, Some(explicit_date), None, CURRENT_DATE, 9),
+            explicit_date
+        );
+        assert_eq!(
+            resolve_snapshot_date(Broker::Sbi, None, Some(explicit_date), CURRENT_DATE, 9),
+            explicit_date
+        );
+    }
 }
