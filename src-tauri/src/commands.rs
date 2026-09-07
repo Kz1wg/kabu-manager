@@ -190,6 +190,26 @@ pub fn delete_import_batch(state: State<AppState>, batch_id: i64) -> Result<(), 
     Ok(())
 }
 
+/// 取込バッチの取込日(スナップショット日)を変更する。
+/// `holdings` 側の同項目も合わせて更新される(database::update_import_batch_snapshot_date参照)。
+#[tauri::command]
+pub fn update_import_batch_snapshot_date(
+    state: State<AppState>,
+    batch_id: i64,
+    new_snapshot_date: String,
+) -> Result<(), String> {
+    let parsed_date = NaiveDate::parse_from_str(new_snapshot_date.trim(), "%Y-%m-%d")
+        .map_err(|_| format!("日付の形式が不正です(YYYY-MM-DD): {new_snapshot_date}"))?;
+
+    let mut connection = state
+        .database_connection
+        .lock()
+        .map_err(|_| "データベース接続のロックに失敗しました".to_owned())?;
+
+    database::update_import_batch_snapshot_date(&mut connection, batch_id, parsed_date)
+        .map_err(|error| error.to_string())
+}
+
 /// CSVの種類(保有株 or 取引履歴)を内容から自動判別して取り込む。
 /// 取引履歴CSV(約定日列を含む)なら重複防止付きで取引を登録し、
 /// それ以外は従来どおり保有株スナップショットとして登録する。

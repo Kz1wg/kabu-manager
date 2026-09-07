@@ -45,6 +45,7 @@ pub fn run() {
             commands::fetch_composition,
             commands::fetch_import_batches,
             commands::delete_import_batch,
+            commands::update_import_batch_snapshot_date,
             commands::import_csv_auto,
             commands::fetch_trade_analysis,
             commands::fetch_database_path,

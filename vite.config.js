@@ -6,6 +6,9 @@ const tauriDevHost = process.env.TAURI_DEV_HOST;
 
 export default defineConfig({
   plugins: [svelte()],
+  build: {
+    chunkSizeWarningLimit: 1000
+  },
   // `tauri dev` のログを消さない
   clearScreen: false,
   server: {

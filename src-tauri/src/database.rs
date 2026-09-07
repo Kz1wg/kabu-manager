@@ -428,6 +428,59 @@ pub fn delete_import_batch(connection: &Connection, batch_id: i64) -> rusqlite::
     )
 }
 
+/// 取込バッチのスナップショット日(取込日)変更で発生しうるエラー
+#[derive(Debug, thiserror::Error)]
+pub enum UpdateSnapshotDateError {
+    #[error("指定された取込履歴が見つかりませんでした")]
+    BatchNotFound,
+    #[error("変更先の日付には既に同じ証券会社の取込履歴が存在します")]
+    DateAlreadyExists,
+    #[error(transparent)]
+    Database(#[from] rusqlite::Error),
+}
+
+/// 取込バッチのスナップショット日(取込日)を変更する。
+/// `import_batches.snapshot_date` と、非正規化されている `holdings.snapshot_date` の
+/// 両方を同一トランザクションで更新する(fetch_latest_holdings 等が両テーブルの
+/// snapshot_date一致を前提にJOINしているため)。
+/// 変更先の日付に同一証券会社の別バッチが既に存在する場合は
+/// `UNIQUE (snapshot_date, broker)` 制約に抵触するため `DateAlreadyExists` を返す。
+pub fn update_import_batch_snapshot_date(
+    connection: &mut Connection,
+    batch_id: i64,
+    new_snapshot_date: NaiveDate,
+) -> Result<(), UpdateSnapshotDateError> {
+    let new_snapshot_date_text = new_snapshot_date.format("%Y-%m-%d").to_string();
+
+    let transaction = connection.transaction()?;
+
+    let updated_batch_count = transaction
+        .execute(
+            "UPDATE import_batches SET snapshot_date = ?1 WHERE batch_id = ?2",
+            params![new_snapshot_date_text, batch_id],
+        )
+        .map_err(|error| match &error {
+            rusqlite::Error::SqliteFailure(_, Some(message))
+                if message.contains("UNIQUE constraint failed") =>
+            {
+                UpdateSnapshotDateError::DateAlreadyExists
+            }
+            _ => UpdateSnapshotDateError::Database(error),
+        })?;
+
+    if updated_batch_count == 0 {
+        return Err(UpdateSnapshotDateError::BatchNotFound);
+    }
+
+    transaction.execute(
+        "UPDATE holdings SET snapshot_date = ?1 WHERE batch_id = ?2",
+        params![new_snapshot_date_text, batch_id],
+    )?;
+
+    transaction.commit()?;
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // 取引履歴
 // ---------------------------------------------------------------------------

@@ -1,18 +1,31 @@
 <script>
   /**
-   * スナップショット管理画面: 取込履歴の一覧と削除(誤取り込みの取り消し)
+   * スナップショット管理画面: 取込履歴の一覧、取込日(スナップショット日)の変更、削除(誤取り込みの取り消し)
    * 削除は取り消し不可なので、実行前に必ず確認ダイアログを挟む。
    * props:
    *   onBatchDeleted: 削除成功時に呼ばれるコールバック(親でholdings等を再取得させる)
+   *   onSnapshotDateChanged: 取込日変更成功時に呼ばれるコールバック(親でholdings等を再取得させる)
+   *
+   * バックエンド(Rust)側に以下のコマンドを追加する必要があります:
+   *   #[tauri::command]
+   *   async fn update_import_batch_snapshot_date(
+   *       batch_id: i64,
+   *       new_snapshot_date: String, // "YYYY-MM-DD"
+   *   ) -> Result<(), String> { ... }
    */
   import { invoke } from "@tauri-apps/api/core";
 
-  let { onBatchDeleted = () => {} } = $props();
+  let { onBatchDeleted = () => {}, onSnapshotDateChanged = () => {} } = $props();
 
   let importBatches = $state([]);
   let loadErrorMessage = $state("");
   let pendingDeleteBatchId = $state(null); // 確認待ちの削除対象(nullなら確認モーダル非表示)
   let isDeleting = $state(false);
+
+  let editingBatchId = $state(null); // インライン編集中のバッチID(nullなら編集中なし)
+  let editSnapshotDateValue = $state("");
+  let isSavingSnapshotDate = $state(false);
+  let saveErrorMessage = $state("");
 
   export async function reload() {
     try {
@@ -58,6 +71,42 @@
     // SQLiteの datetime('now','localtime') 形式 'YYYY-MM-DD HH:MM:SS' をそのまま整形して表示
     return rawDateTimeText.replace("T", " ");
   }
+
+  function startEditSnapshotDate(batch) {
+    editingBatchId = batch.batch_id;
+    editSnapshotDateValue = batch.snapshot_date;
+    saveErrorMessage = "";
+  }
+
+  function cancelEditSnapshotDate() {
+    editingBatchId = null;
+    editSnapshotDateValue = "";
+    saveErrorMessage = "";
+  }
+
+  async function confirmEditSnapshotDate() {
+    if (editingBatchId == null) return;
+    if (!editSnapshotDateValue) {
+      saveErrorMessage = "取込日を入力してください。";
+      return;
+    }
+    isSavingSnapshotDate = true;
+    try {
+      await invoke("update_import_batch_snapshot_date", {
+        batchId: editingBatchId,
+        newSnapshotDate: editSnapshotDateValue,
+      });
+      editingBatchId = null;
+      editSnapshotDateValue = "";
+      saveErrorMessage = "";
+      await reload();
+      onSnapshotDateChanged();
+    } catch (errorMessage) {
+      saveErrorMessage = String(errorMessage);
+    } finally {
+      isSavingSnapshotDate = false;
+    }
+  }
 </script>
 
 {#if loadErrorMessage}
@@ -82,7 +131,45 @@
       <tbody>
         {#each importBatches as batch (batch.batch_id)}
           <tr>
-            <td>{batch.snapshot_date}</td>
+            {#if editingBatchId === batch.batch_id}
+              <td class="snapshot-date-edit">
+                <input
+                  type="date"
+                  bind:value={editSnapshotDateValue}
+                  disabled={isSavingSnapshotDate}
+                />
+                <div class="edit-actions">
+                  <button
+                    class="save-date-button"
+                    onclick={confirmEditSnapshotDate}
+                    disabled={isSavingSnapshotDate}
+                  >
+                    {isSavingSnapshotDate ? "保存中..." : "保存"}
+                  </button>
+                  <button
+                    class="cancel-date-button"
+                    onclick={cancelEditSnapshotDate}
+                    disabled={isSavingSnapshotDate}
+                  >
+                    キャンセル
+                  </button>
+                </div>
+                {#if saveErrorMessage}
+                  <p class="save-error-message">{saveErrorMessage}</p>
+                {/if}
+              </td>
+            {:else}
+              <td class="snapshot-date-cell">
+                <span>{batch.snapshot_date}</span>
+                <button
+                  class="edit-date-button"
+                  onclick={() => startEditSnapshotDate(batch)}
+                  title="取込日を変更"
+                >
+                  変更
+                </button>
+              </td>
+            {/if}
             <td>{batch.broker_display_name}</td>
             <td class="numeric">{batch.holding_count}</td>
             <td class="file-name" title={batch.source_file_name ?? ""}>
@@ -188,6 +275,74 @@
   }
   .delete-button:hover {
     background: #fdf1ef;
+  }
+
+  .snapshot-date-cell {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    white-space: nowrap;
+  }
+  .edit-date-button {
+    padding: 0.15rem 0.55rem;
+    border: 1px solid #c6ccda;
+    border-radius: 6px;
+    background: #fff;
+    color: #445;
+    font-size: 0.75rem;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.1s;
+  }
+  tr:hover .edit-date-button {
+    opacity: 1;
+  }
+  .edit-date-button:hover {
+    background: #f2f4f9;
+  }
+
+  .snapshot-date-edit {
+    min-width: 12rem;
+  }
+  .snapshot-date-edit input[type="date"] {
+    padding: 0.25rem 0.4rem;
+    border: 1px solid #c6ccda;
+    border-radius: 6px;
+    font-size: 0.85rem;
+  }
+  .edit-actions {
+    display: flex;
+    gap: 0.4rem;
+    margin-top: 0.35rem;
+  }
+  .save-date-button {
+    padding: 0.25rem 0.7rem;
+    border: none;
+    border-radius: 6px;
+    background: #2f6fed;
+    color: #fff;
+    font-size: 0.78rem;
+    cursor: pointer;
+  }
+  .save-date-button:hover:not(:disabled) {
+    background: #255cc7;
+  }
+  .cancel-date-button {
+    padding: 0.25rem 0.7rem;
+    border: 1px solid #c6ccda;
+    border-radius: 6px;
+    background: #fff;
+    color: #445;
+    font-size: 0.78rem;
+    cursor: pointer;
+  }
+  .cancel-date-button:hover:not(:disabled) {
+    background: #f2f4f9;
+  }
+  .save-error-message {
+    color: #c0392b;
+    font-size: 0.75rem;
+    margin: 0.3rem 0 0;
   }
 
   .modal-overlay {
