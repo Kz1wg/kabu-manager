@@ -2,7 +2,7 @@
 name = "kabu-manager"
 version = "0.1.0"
 description = "保有株管理アプリ(SBI証券/e-smart証券のCSV取り込み・SQLite記録・可視化)"
-edition = "2021"
+edition = "2024"
 
 [lib]
 name = "kabu_manager_lib"
